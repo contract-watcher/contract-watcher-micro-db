@@ -1,1 +1,2 @@
-# contract-watcher-micro-db
+![build](https://github.com/contract-watcher/contract-watcher-micro-db/actions/workflows/build.yml/badge.svg)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)

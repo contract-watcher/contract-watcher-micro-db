@@ -1,0 +1,15 @@
+name: Require linked issue
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: read
+  pull-requests: read
+  issues: read
+
+jobs:
+  require-linked-issue:
+    name: Linked issue
+    uses: contract-watcher/.github/.github/workflows/require-linked-issue.yml@main
