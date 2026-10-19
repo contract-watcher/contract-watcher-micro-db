@@ -43,14 +43,15 @@ jobs:
           --settings tests/coverlet.runsettings \
           --results-directory ./tests/TestResults \
           -v:n
-  
+
       - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v4
-        env:
-          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+        uses: codecov/codecov-action@v5
         with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          slug: ${{ github.repository }}
           files: tests/TestResults/**/coverage.cobertura.xml
           fail_ci_if_error: true
+          verbose: true
 
       - name: Perform CodeQL Analysis
         uses: github/codeql-action/analyze@v4
