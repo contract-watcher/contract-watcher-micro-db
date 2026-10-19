@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using System.Text.Json;
 using ContractWatcher.MicroDb.Exceptions;
 
@@ -240,6 +241,7 @@ internal sealed class JsonFileStore<TEntity> where TEntity : class
     /// Метод используется только как cleanup для временных файлов.
     /// </para>
     /// </remarks>
+    [ExcludeFromCodeCoverage]
     private void TryDeleteTemporaryFile()
     {
         try

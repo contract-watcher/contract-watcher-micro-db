@@ -33,6 +33,24 @@ jobs:
 
       - name: Build
         run: dotnet build ContractWatcher.MicroDb.sln --no-restore -c Release /p:RunAnalyzersDuringBuild=true /p:TreatWarningsAsErrors=true
+        
+      - name: Tests
+        run: |
+          rm -rf tests/TestResults
+          dotnet test ContractWatcher.SDK.sln \
+          -c Release \
+          --collect:"XPlat Code Coverage" \
+          --settings tests/coverlet.runsettings \
+          --results-directory ./tests/TestResults \
+          -v:n
+  
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v4
+        env:
+          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+        with:
+          files: tests/TestResults/**/coverage.cobertura.xml
+          fail_ci_if_error: true
 
       - name: Perform CodeQL Analysis
         uses: github/codeql-action/analyze@v4

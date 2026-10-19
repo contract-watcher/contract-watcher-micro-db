@@ -3,7 +3,23 @@
     <PropertyGroup>
         <TargetFramework>net10.0</TargetFramework>
         <ImplicitUsings>enable</ImplicitUsings>
+        <Version>1.0.0</Version>
+        <Authors>a1unade</Authors>
+        <Company>ContractWatcher</Company>
+        <Copyright>Copyright © ContractWatcher</Copyright>
         <Nullable>enable</Nullable>
+        <Description>Lightweight embedded JSON storage for .NET with typed entity sets, concurrent in-memory operations, and explicit persistence.</Description>
+        <PackageTags>contractwatcher;microdb;dotnet;storage;embedded;database;json;persistence</PackageTags>
+        <PackageId>ContractWatcher.MicroDb</PackageId>
+        <RepositoryUrl>https://github.com/contract-watcher/contract-watcher-micro-db</RepositoryUrl>
+        <RepositoryType>git</RepositoryType>
+        <PackageProjectUrl>https://github.com/contract-watcher/contract-watcher-micro-db</PackageProjectUrl>
+        <PackageLicenseExpression>MIT</PackageLicenseExpression>
+        <PackageRequireLicenseAcceptance>false</PackageRequireLicenseAcceptance>
+    </PropertyGroup>
+
+    <PropertyGroup>
+        <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
     </PropertyGroup>
 
 </Project>

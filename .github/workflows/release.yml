@@ -1,0 +1,105 @@
+name: release
+
+on:
+  pull_request:
+    types: [closed]
+    branches: [main]
+
+jobs:
+  release:
+    if: github.event.pull_request.merged == true
+
+    runs-on: ubuntu-latest
+    
+    env:
+      NUGET_PACKAGES: ${{ github.workspace }}/.nuget/packages
+
+    permissions:
+      contents: write
+      packages: write
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.merge_commit_sha }}
+
+      - name: Decide bump from PR labels
+        id: bump
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const labels = (context.payload.pull_request.labels || []).map(l => l.name);
+            const has = (x) => labels.includes(x);
+
+            let bump = 'patch';
+
+            if (has('no-release')) bump = 'false';
+            else if (has('major')) bump = 'major';
+            else if (has('minor')) bump = 'minor';
+            else if (has('patch')) bump = 'patch';
+
+            core.setOutput('value', bump);
+
+      - name: Bump version and push tag
+        id: tag_version
+        if: steps.bump.outputs.value != 'false'
+        uses: mathieudutour/github-tag-action@v6.2
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          tag_prefix: v
+          default_bump: ${{ steps.bump.outputs.value }}
+
+      - name: Setup .NET
+        if: steps.bump.outputs.value != 'false'
+        uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: '10.0.x'
+          cache: true
+          cache-dependency-path: src/packages.lock.json
+
+      - name: Restore
+        if: steps.bump.outputs.value != 'false'
+        run: dotnet restore ContractWatcher.SDK.sln
+
+      - name: Build
+        if: steps.bump.outputs.value != 'false'
+        env:
+          VERSION: ${{ steps.tag_version.outputs.new_version }}
+        run: |
+          dotnet build ContractWatcher.SDK.sln \
+            -c Release \
+            --no-restore \
+            -p:Version="$VERSION"
+
+      - name: Pack
+        if: steps.bump.outputs.value != 'false'
+        env:
+          VERSION: ${{ steps.tag_version.outputs.new_version }}
+        run: |
+          dotnet pack src/ContractWatcher.SDK.csproj \
+            -c Release \
+            --no-build \
+            -p:Version="$VERSION" \
+            -p:PackageVersion="$VERSION" \
+            -o ./nupkg
+
+      - name: Push to NuGet.org
+        if: steps.bump.outputs.value != 'false'
+        env:
+          NUGET_TOKEN: ${{ secrets.NUGET_TOKEN }}
+        run: |
+          dotnet nuget push "./nupkg/*.nupkg" \
+            --api-key "$NUGET_TOKEN" \
+            --source "https://api.nuget.org/v3/index.json" \
+            --skip-duplicate
+
+      - name: Push to GitHub Packages
+        if: steps.bump.outputs.value != 'false'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          dotnet nuget push "./nupkg/*.nupkg" \
+            --source "https://nuget.pkg.github.com/${{ github.repository_owner }}/index.json" \
+            --api-key "$GITHUB_TOKEN" \
+            --skip-duplicate
