@@ -37,7 +37,7 @@ jobs:
       - name: Tests
         run: |
           rm -rf tests/TestResults
-          dotnet test ContractWatcher.SDK.sln \
+          dotnet test ContractWatcher.MicroDb.sln \
           -c Release \
           --collect:"XPlat Code Coverage" \
           --settings tests/coverlet.runsettings \

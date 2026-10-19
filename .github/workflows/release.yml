@@ -60,14 +60,14 @@ jobs:
 
       - name: Restore
         if: steps.bump.outputs.value != 'false'
-        run: dotnet restore ContractWatcher.SDK.sln
+        run: dotnet restore ContractWatcher.MicroDb.sln
 
       - name: Build
         if: steps.bump.outputs.value != 'false'
         env:
           VERSION: ${{ steps.tag_version.outputs.new_version }}
         run: |
-          dotnet build ContractWatcher.SDK.sln \
+          dotnet build ContractWatcher.MicroDb.sln \
             -c Release \
             --no-restore \
             -p:Version="$VERSION"
@@ -77,7 +77,7 @@ jobs:
         env:
           VERSION: ${{ steps.tag_version.outputs.new_version }}
         run: |
-          dotnet pack src/ContractWatcher.SDK.csproj \
+          dotnet pack src/ContractWatcher.MicroDb.csproj \
             -c Release \
             --no-build \
             -p:Version="$VERSION" \
