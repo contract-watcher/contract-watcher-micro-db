@@ -1,7 +1,9 @@
 using System.Collections;
 using System.Collections.Immutable;
+using System.Text.Json;
 using ContractWatcher.MicroDb.Interfaces;
 using ContractWatcher.MicroDb.Storage;
+using ContractWatcher.MicroDb.Tracking.Enums;
 
 namespace ContractWatcher.MicroDb;
 
@@ -44,7 +46,8 @@ namespace ContractWatcher.MicroDb;
 /// на протяжении всего времени её нахождения в наборе.
 /// </para>
 /// </remarks>
-public sealed class MicroDbSet<TEntity, TKey> : IEnumerable<TEntity> where TEntity : class where TKey : notnull
+public sealed class MicroDbSet<TEntity, TKey> : IEnumerable<TEntity> 
+    where TEntity : class where TKey : notnull
 {
     /// <summary>
     /// Внутреннее состояние текущего набора сущностей.
@@ -72,11 +75,10 @@ public sealed class MicroDbSet<TEntity, TKey> : IEnumerable<TEntity> where TEnti
     /// <summary>
     /// Инициализирует новый набор сущностей <c>MicroDB</c>.
     /// </summary>
-    /// <param name="keySelector">
-    /// Функция, возвращающая уникальный ключ сущности.
-    /// </param>
-    /// <param name="fileStore">Файловое хранилище, связанное с набором.
-    /// </param>
+    /// <param name="keySelector">Функция, возвращающая уникальный ключ сущности.</param>
+    /// <param name="fileStore">Файловое хранилище, связанное с набором.</param>
+    /// <param name="trackingMode">Режим получения уведомлений об изменениях.</param>
+    /// <param name="serializerOptions">Параметры JSON-сериализации persistence-слоя.</param>
     /// <remarks>
     /// <para>
     /// Конструктор является внутренним, поскольку экземпляры
@@ -88,15 +90,22 @@ public sealed class MicroDbSet<TEntity, TKey> : IEnumerable<TEntity> where TEnti
     /// загружается из связанного файла.
     /// </para>
     /// </remarks>
-    internal MicroDbSet(Func<TEntity, TKey> keySelector, JsonFileStore<TEntity> fileStore)
+    internal MicroDbSet(
+        Func<TEntity, TKey> keySelector, 
+        JsonFileStore<TEntity> fileStore,
+        JsonSerializerOptions serializerOptions,
+        ChangeTrackingMode trackingMode = ChangeTrackingMode.None)
     {
         if (keySelector is null)
             throw new ArgumentNullException(nameof(keySelector));
         
         if (fileStore is null)
             throw new ArgumentNullException(nameof(fileStore));
+        
+        if (serializerOptions is null)
+            throw new ArgumentNullException(nameof(serializerOptions));
 
-        _state = new State<TEntity, TKey>(keySelector, fileStore);
+        _state = new State<TEntity, TKey>(keySelector, fileStore, serializerOptions, trackingMode);
     }
 
     /// <summary>
@@ -135,6 +144,22 @@ public sealed class MicroDbSet<TEntity, TKey> : IEnumerable<TEntity> where TEnti
     /// присутствует в наборе; иначе <c>false</c>.
     /// </returns>
     public bool Contains(TKey key) => _state.Contains(key);
+    
+    /// <summary>
+    /// Возвращает состояние сущности относительно
+    /// последнего успешно сохранённого состояния.
+    /// </summary>
+    /// <param name="key">Уникальный ключ сущности.</param>
+    /// <returns>Текущее состояние сущности.</returns>
+    public EntityState GetState(TKey key) => _state.GetState(key);
+
+    /// <summary>
+    /// Явно сообщает Change Tracker о потенциальном
+    /// изменении сущности.
+    /// </summary>
+    /// <param name="key">Уникальный ключ изменённой сущности.</param>
+    /// <remarks>Метод предназначен для <see cref="ChangeTrackingMode.Manual"/>.</remarks>
+    public void MarkChanged(TKey key) => _state.MarkChanged(key);
 
     /// <summary>
     /// Добавляет новую сущность в набор.

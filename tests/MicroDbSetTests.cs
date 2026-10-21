@@ -1,4 +1,8 @@
 using System.Collections;
+using System.Text.Json;
+using ContractWatcher.MicroDb.Storage;
+using ContractWatcher.MicroDb.Tests.Fixtures;
+using ContractWatcher.MicroDb.Tracking.Enums;
 
 // Fixtures
 using static ContractWatcher.MicroDb.Tests.Fixtures.MicroDbFixture;
@@ -16,7 +20,8 @@ public sealed class MicroDbSetTests
         // Act
         // ReSharper disable once AccessToDisposedClosure
         var action = () => 
-            new MicroDbSet<TestEntity, string>(null!, directory.CreateStore());
+            new MicroDbSet<TestEntity, string>(
+                null!, directory.CreateStore(), new(JsonSerializerDefaults.Web));
 
         // Assert
         Assert.Throws<ArgumentNullException>(action);
@@ -27,7 +32,7 @@ public sealed class MicroDbSetTests
     {
         // Act
         var action = () => 
-            new MicroDbSet<TestEntity, string>(entity => entity.Id, null!);
+            new MicroDbSet<TestEntity, string>(entity => entity.Id, null!, new(JsonSerializerDefaults.Web));
 
         // Assert
         Assert.Throws<ArgumentNullException>(action);
@@ -134,5 +139,17 @@ public sealed class MicroDbSetTests
         Assert.False(untyped.MoveNext());
 
         (untyped as IDisposable)?.Dispose();
+    }
+    
+    [Fact]
+    public void Constructor_NullSerializerOptions_ThrowsArgumentNullException()
+    {
+        using var directory = new TemporaryDirectory();
+
+        var store = new JsonFileStore<TestEntity>(Path.Combine(directory.Path, "test.json"), 
+            new JsonSerializerOptions());
+
+        Assert.Throws<ArgumentNullException>(() => new MicroDbSet<TestEntity, string>(
+            static entity => entity.Id, store, null!));
     }
 }

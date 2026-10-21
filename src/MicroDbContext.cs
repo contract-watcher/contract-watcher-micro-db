@@ -2,6 +2,7 @@ using System.Text.Json;
 using ContractWatcher.MicroDb.Interfaces;
 using ContractWatcher.MicroDb.Options;
 using ContractWatcher.MicroDb.Storage;
+using ContractWatcher.MicroDb.Tracking.Enums;
 
 namespace ContractWatcher.MicroDb;
 
@@ -180,17 +181,16 @@ public abstract class MicroDbContext : IDisposable
     /// <param name="keySelector">
     /// Функция, возвращающая уникальный ключ сущности.
     /// </param>
+    /// <param name="mode">Режим получения уведомлений об изменениях.</param>
     /// <returns>
     /// Зарегистрированный экземпляр <see cref="MicroDbSet{TEntity,TKey}"/>.
     /// </returns>
     /// <remarks>
     /// <para>Один набор соответствует одному JSON-файлу.</para>
-    ///
     /// <para>
     /// Имена наборов сравниваются без учёта регистра.
     /// Повторная регистрация одного имени не допускается.
     /// </para>
-    ///
     /// <para>
     /// Для имени разрешены только буквы, цифры,
     /// символы <c>-</c> и <c>_</c>.
@@ -209,7 +209,8 @@ public abstract class MicroDbContext : IDisposable
     /// Набор с указанным именем уже зарегистрирован в текущем контексте.
     /// </exception>
     /// <exception cref="ObjectDisposedException">Контекст уже был освобождён.</exception>
-    protected MicroDbSet<TEntity, TKey> Set<TEntity, TKey>(string name, Func<TEntity, TKey> keySelector)
+    protected MicroDbSet<TEntity, TKey> Set<TEntity, TKey>(
+        string name, Func<TEntity, TKey> keySelector, ChangeTrackingMode mode = ChangeTrackingMode.None)
         where TEntity : class where TKey : notnull
     {
         if (_disposed)
@@ -225,7 +226,7 @@ public abstract class MicroDbContext : IDisposable
 
         var filePath = Path.Combine(_directoryPath, $"{name}.json");
         var fileStore = new JsonFileStore<TEntity>(filePath, _serializerOptions);
-        var set = new MicroDbSet<TEntity, TKey>(keySelector, fileStore);
+        var set = new MicroDbSet<TEntity, TKey>(keySelector, fileStore, _serializerOptions, mode);
 
         _sets.Add(name, set.InternalSet);
 
