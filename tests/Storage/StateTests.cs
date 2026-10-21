@@ -4,6 +4,8 @@ using ContractWatcher.MicroDb.Exceptions;
 using ContractWatcher.MicroDb.Interfaces;
 using ContractWatcher.MicroDb.Storage;
 using ContractWatcher.MicroDb.Tests.Fakes;
+using ContractWatcher.MicroDb.Tests.Fixtures;
+using ContractWatcher.MicroDb.Tracking.Enums;
 
 // Fixtures
 using static ContractWatcher.MicroDb.Tests.Fixtures.MicroDbFixture;
@@ -221,7 +223,10 @@ public sealed class StateTests
         var secondKey = new CallbackKey(2);
 
         using var state = new State<TestEntity, CallbackKey>(
-            entity => entity.Id == "first" ? firstKey : secondKey, directory.CreateStore());
+            entity => entity.Id == "first" ? firstKey : secondKey, 
+            directory.CreateStore(), 
+            new(JsonSerializerDefaults.Web), 
+            ChangeTrackingMode.None);
 
         state.Add(CreateEntity("first"));
 
@@ -287,6 +292,47 @@ public sealed class StateTests
         Assert.Throws<ObjectDisposedException>(() => state.GetEnumerator());
 
         await Assert.ThrowsAsync<ObjectDisposedException>(() => set.SaveChangesAsync());
+    }
+    
+    [Fact]
+    public void Constructor_NullKeySelector_ThrowsArgumentNullException()
+    {
+        using var directory = new TemporaryDirectory();
+        var serializerOptions = new JsonSerializerOptions(JsonSerializerDefaults.Web);
+        var fileStore = new JsonFileStore<TestEntity>(
+            Path.Combine(directory.Path, "entities.json"), serializerOptions);
+
+        var exception = Assert.Throws<ArgumentNullException>(() => new State<TestEntity, int>(
+            null!, fileStore, serializerOptions, ChangeTrackingMode.None));
+
+        Assert.Equal("keySelector", exception.ParamName);
+    }
+
+    [Fact]
+    public void Constructor_NullFileStore_ThrowsArgumentNullException()
+    {
+        var serializerOptions = new JsonSerializerOptions(JsonSerializerDefaults.Web);
+
+        var exception = Assert.Throws<ArgumentNullException>(() => new State<TestEntity, string>(
+            static entity => entity.Id, null!, serializerOptions, ChangeTrackingMode.None));
+
+        Assert.Equal("fileStore", exception.ParamName);
+    }
+
+    [Fact]
+    public void Constructor_NullSerializerOptions_ThrowsArgumentNullException()
+    {
+        using var directory = new TemporaryDirectory();
+
+        var serializerOptions = new JsonSerializerOptions(JsonSerializerDefaults.Web);
+
+        var fileStore = new JsonFileStore<TestEntity>(
+            Path.Combine(directory.Path, "entities.json"), serializerOptions);
+
+        var exception = Assert.Throws<ArgumentNullException>(() => new State<TestEntity, string>(
+            static entity => entity.Id, fileStore, null!, ChangeTrackingMode.None));
+
+        Assert.Equal("serializerOptions", exception.ParamName);
     }
 
     private static void Mutate(State<TestEntity, string> state, string operation, TestEntity entity)

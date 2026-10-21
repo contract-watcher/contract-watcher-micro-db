@@ -1,6 +1,7 @@
 using System.Text.Json;
 using ContractWatcher.MicroDb.Options;
 using ContractWatcher.MicroDb.Storage;
+using ContractWatcher.MicroDb.Tracking.Enums;
 
 namespace ContractWatcher.MicroDb.Tests.Fixtures;
 
@@ -50,7 +51,7 @@ public static class MicroDbFixture
             new(FilePath, options ?? new(JsonSerializerDefaults.Web));
 
         internal State<TestEntity, string> CreateState(JsonSerializerOptions? options = null) =>
-            new(entity => entity.Id, CreateStore(options));
+            new(entity => entity.Id, CreateStore(options), new(JsonSerializerDefaults.Web), ChangeTrackingMode.None);
 
         public void WriteFile(string json) => File.WriteAllText(FilePath, json);
 

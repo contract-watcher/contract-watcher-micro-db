@@ -1,7 +1,10 @@
 using System.Collections;
 using System.Collections.Immutable;
+using System.Text.Json;
 using ContractWatcher.MicroDb.Exceptions;
 using ContractWatcher.MicroDb.Interfaces;
+using ContractWatcher.MicroDb.Tracking;
+using ContractWatcher.MicroDb.Tracking.Enums;
 
 namespace ContractWatcher.MicroDb.Storage;
 
@@ -97,20 +100,22 @@ internal sealed class State<TEntity, TKey> : IMicroDbSet, IEnumerable<TEntity>
     private Snapshot _snapshot;
 
     /// <summary>
-    /// Номер последней версии состояния набора,
+    /// Номер последней версии runtime-состояния набора,
     /// успешно сохранённой в постоянное хранилище.
     /// </summary>
     /// <remarks>
     /// <para>
-    /// Значение используется совместно с номером версии текущего
-    /// <see cref="_snapshot"/> для определения наличия несохранённых изменений.
+    /// Поле используется совместно с номером версии текущего
+    /// <see cref="_snapshot"/> для отслеживания явных операций
+    /// <see cref="Add"/>, <see cref="Update"/>, <see cref="Upsert"/> и <see cref="Remove"/>.
     /// </para>
     /// <para>
-    /// Если версия текущего снимка больше сохранённой версии,
-    /// набор содержит изменения, которые ещё не были записаны на диск.
+    /// Прямые изменения уже полученных экземпляров сущностей
+    /// отслеживаются отдельно через <see cref="_changeTracker"/>.
     /// </para>
     /// <para>
-    /// Поле обновляется только после успешного завершения операции сохранения.
+    /// Значение обновляется только после успешного завершения
+    /// операции persistence.
     /// </para>
     /// </remarks>
     private long _persistedVersion;
@@ -134,13 +139,54 @@ internal sealed class State<TEntity, TKey> : IMicroDbSet, IEnumerable<TEntity>
     /// </para>
     /// </remarks>
     private int _disposed;
+    
+    /// <summary>
+    /// Отслеживает изменения сущностей относительно
+    /// последнего успешно сохранённого состояния.
+    /// </summary>
+    /// <remarks>
+    /// Change Tracker дополняет существующий runtime snapshot,
+    /// но не заменяет его.
+    ///
+    /// <see cref="_snapshot"/> продолжает быть источником
+    /// текущего in-memory состояния набора.
+    /// </remarks>
+    private readonly ChangeTracker<TEntity, TKey> _changeTracker;
 
-    internal State(Func<TEntity, TKey> keySelector, JsonFileStore<TEntity> fileStore)
+    /// <summary>
+    /// Создаёт внутреннее состояние набора сущностей,
+    /// восстанавливает сохранённые данные и инициализирует Change Tracker
+    /// </summary>
+    /// <param name="keySelector">Функция получения уникального ключа сущности.</param>
+    /// <param name="fileStore">Файловое хранилище текущего набора.</param>
+    /// <param name="serializerOptions">
+    /// Параметры JSON-сериализации, используемые как persistence-слоем,
+    /// так и Change Tracker при вычислении fingerprints.
+    /// </param>
+    /// <param name="trackingMode">
+    /// Способ получения уведомлений об изменениях mutable-сущностей.
+    /// </param>
+    internal State(
+        Func<TEntity, TKey> keySelector,
+        JsonFileStore<TEntity> fileStore,
+        JsonSerializerOptions serializerOptions,
+        ChangeTrackingMode trackingMode)
     {
-        _keySelector = keySelector;
-        _fileStore = fileStore;
-        _snapshot = new Snapshot(LoadItems(), Version: 0);
+        _keySelector = keySelector ?? throw new ArgumentNullException(nameof(keySelector));
+        _fileStore = fileStore ?? throw new ArgumentNullException(nameof(fileStore));
+
+        if (serializerOptions is null)
+            throw new ArgumentNullException(nameof(serializerOptions));
+
+        // Состояние загружается один раз
+        // Этот же набор становится одновременно:
+        // 1. начальным runtime snapshot
+        // 2. persisted baseline для Change Tracker
+        var items = LoadItems();
+
+        _snapshot = new Snapshot(items, Version: 0);
         _persistedVersion = 0;
+        _changeTracker = new ChangeTracker<TEntity, TKey>(trackingMode, serializerOptions, items);
     }
 
     /// <summary>
@@ -178,10 +224,19 @@ internal sealed class State<TEntity, TKey> : IMicroDbSet, IEnumerable<TEntity>
             if (Volatile.Read(ref _disposed) != 0)
                 throw new ObjectDisposedException(GetType().Name);
 
-            var currentVersion = Volatile.Read(ref _snapshot).Version;
+            var snapshot = Volatile.Read(ref _snapshot);
             var persistedVersion = Volatile.Read(ref _persistedVersion);
 
-            return currentVersion > persistedVersion;
+            // Быстрый путь для существующего механизма MicroDb
+            // Если Snapshot.Version вырос, значит выполнялся Add / Update / Upsert / Remove
+            // В таком случае hashing вообще не требуется
+            if (snapshot.Version > persistedVersion)
+                return true;
+
+            // Если структура snapshot не менялась,
+            // дополнительно проверяем прямые изменения
+            // mutable-сущностей, полученные через Change Tracker
+            return _changeTracker.HasChanges(snapshot.Items);
         }
     }
 
@@ -235,6 +290,58 @@ internal sealed class State<TEntity, TKey> : IMicroDbSet, IEnumerable<TEntity>
 
         return Volatile.Read(ref _snapshot).Items.ContainsKey(key);
     }
+    
+    /// <summary>
+    /// Возвращает состояние сущности относительно
+    /// последнего успешно сохранённого состояния.
+    /// </summary>
+    /// <param name="key">Уникальный ключ сущности.</param>
+    /// <returns>Текущее состояние сущности в Change Tracker.</returns>
+    /// <remarks>
+    /// Проверка выполняется относительно одного опубликованного
+    /// immutable snapshot текущего набора.
+    /// </remarks>
+    /// <exception cref="ObjectDisposedException">Набор уже был освобождён.</exception>
+    internal EntityState GetState(TKey key)
+    {
+        if (Volatile.Read(ref _disposed) != 0)
+            throw new ObjectDisposedException(GetType().Name);
+
+        var snapshot = Volatile.Read(ref _snapshot);
+
+        return _changeTracker.GetState(key, snapshot.Items);
+    }
+    
+    /// <summary>
+    /// Явно уведомляет Change Tracker о потенциальном изменении сущности.
+    /// </summary>
+    /// <param name="key">Уникальный ключ изменённой сущности.</param>
+    /// <remarks>
+    /// <para>
+    /// Метод предназначен для <see cref="ChangeTrackingMode.Manual"/>.
+    /// </para>
+    /// <para>
+    /// Сам вызов не означает, что сущность обязательно изменилась.
+    /// При следующей проверке Change Tracker сравнит текущий
+    /// fingerprint с persisted baseline.
+    /// </para>
+    /// </remarks>
+    /// <exception cref="ObjectDisposedException">Набор уже был освобождён.</exception>
+    /// <exception cref="KeyNotFoundException">
+    /// Сущность с указанным ключом отсутствует в текущем runtime state.
+    /// </exception>
+    internal void MarkChanged(TKey key)
+    {
+        if (Volatile.Read(ref _disposed) != 0)
+            throw new ObjectDisposedException(GetType().Name);
+
+        var snapshot = Volatile.Read(ref _snapshot);
+
+        if (!snapshot.Items.ContainsKey(key))
+            throw new KeyNotFoundException($"Entity with key '{key}' does not exist.");
+
+        _changeTracker.MarkChanged(key);
+    }
 
     /// <summary>
     /// Добавляет новую сущность в текущее состояние набора.
@@ -278,6 +385,13 @@ internal sealed class State<TEntity, TKey> : IMicroDbSet, IEnumerable<TEntity>
 
             return items.Add(key, entity);
         });
+        
+        // Runtime snapshot уже успешно опубликован
+        // В Events-режиме tracker подписывает новую сущность на IEntityChangeSource.Changed
+        //
+        // Dirty-маркер для Add не нужен:
+        // состояние Added определяется отсутствием key в persisted baseline.
+        _changeTracker.EntityAdded(key, entity);
     }
 
     /// <summary>
@@ -323,6 +437,12 @@ internal sealed class State<TEntity, TKey> : IMicroDbSet, IEnumerable<TEntity>
 
             return items.SetItem(key, entity);
         });
+        
+        // Explicit Update является самостоятельным сигналом потенциального изменения.
+        //
+        // В Events-режиме здесь также обновляется subscription,
+        // если под тем же key был опубликован новый instance
+        _changeTracker.EntityUpdated(key, entity);
     }
 
     /// <summary>
@@ -359,6 +479,10 @@ internal sealed class State<TEntity, TKey> : IMicroDbSet, IEnumerable<TEntity>
         var key = GetKey(entity);
 
         Mutate(items => items.SetItem(key, entity));
+        
+        // Upsert может фактически оказаться как Add, так и Update
+        // Change Tracker определит итоговое EntityState относительно persisted baseline
+        _changeTracker.EntityUpdated(key, entity);
     }
 
     /// <summary>
@@ -420,7 +544,17 @@ internal sealed class State<TEntity, TKey> : IMicroDbSet, IEnumerable<TEntity>
             // значит состояние не изменилось между чтением и публикацией,
             // а новый snapshot был успешно установлен.
             if (ReferenceEquals(observed, current))
+            {
+                // Сущность успешно удалена из опубликованного runtime state
+                // 
+                // В Events-режиме больше нет смысла держать subscription на удалённый instance
+                //
+                // Само состояние Deleted определяется структурно:
+                // key остаётся в persisted baseline, но отсутствует в current snapshot
+                _changeTracker.EntityRemoved(key);
+                
                 return true;
+            }
             
             // Иначе другой writer опередил нас.
             // Цикл начнётся заново уже относительно более свежего snapshot.
@@ -443,30 +577,76 @@ internal sealed class State<TEntity, TKey> : IMicroDbSet, IEnumerable<TEntity>
     {
         if (Volatile.Read(ref _disposed) != 0)
             throw new ObjectDisposedException(GetType().Name);
-
+    
         await _saveSemaphore.WaitAsync(cancellationToken);
-
+    
         try
         {
-            // Получаем immutable snapshot, который будем сохранять.
-            // После этой строки другие writer'ы могут публиковать
-            // новые версии состояния. Текущая операция продолжит
-            // работать со своим снимком, который уже не изменяется.
+            // Захватываем один опубликованный immutable snapshot
+            //
+            // Add / Update / Upsert / Remove, опубликованные
+            // после этого чтения, относятся уже к следующему save
             var snapshot = Volatile.Read(ref _snapshot);
             var persistedVersion = Volatile.Read(ref _persistedVersion);
-
-            if (snapshot.Version <= persistedVersion)
-                return 0;
-
-            await _fileStore.SaveAsync(snapshot.Items.Values, cancellationToken);
+    
+            // Version продолжает отвечать за существующий explicit mutation flow MicroDb
+            var hasVersionChanges = snapshot.Version > persistedVersion;
+    
+            // Change Tracker дополнительно определяет:
+            //
+            // - Added;
+            // - Modified;
+            // - Deleted;
+            //
+            // относительно своего persisted baseline
+            //
+            // Для existing dirty-сущностей здесь вычисляется
+            // текущий fingerprint и сравнивается с сохранённым
+            var detection = _changeTracker.DetectChanges(snapshot.Items);
+    
+            // Сущность могла отправить Changed, но затем вернуться к исходному состоянию
+            //
+            // Например: "A" -> "B" -> "A"
+            // 
+            // Fingerprint снова совпадает с baseline,
+            // поэтому старый dirty-сигнал можно удалить
+            //
+            // Если параллельно уже пришёл более новый сигнал,
+            // ChangeTracker не удалит его благодаря dirty version
+            _changeTracker.AcceptVerifiedUnchanged(detection);
             
-            // На диск была успешно записана именно эта версия.
-            // Если во время выполнения появились более новые изменения,
-            // их Version будет больше snapshot.
-            // Version и IMicroDbSet.HasChanges останется true.
+            // Если runtime version не менялась и tracker
+            // не обнаружил фактических изменений, filesystem вообще не затрагивается
+            if (!hasVersionChanges && !detection.HasChanges)
+                return 0;
+    
+            // На диск сохраняется именно захваченный выше snapshot
+            //
+            // Если persistence завершится ошибкой,
+            // выполнение не дойдёт до AcceptChanges и persistedVersion также не изменится
+            await _fileStore.SaveAsync(snapshot.Items.Values, cancellationToken);
+    
+            // Только после успешной записи текущее состояние
+            // становится новым persisted baseline Change Tracker.
+            _changeTracker.AcceptChanges(snapshot.Items, detection);
+    
+            // На диск была успешно записана именно захваченная версия runtime snapshot
+            //
+            // Более новые CAS-мутации будут иметь Version выше
+            // и останутся pending для следующего SaveChangesAsync
             Volatile.Write(ref _persistedVersion, snapshot.Version);
-
-            return checked((int)(snapshot.Version - persistedVersion));
+    
+            // Для существующего explicit mutation flow
+            // сохраняем прежнюю семантику возвращаемого значения:
+            // количество опубликованных runtime-версий
+            //
+            // Если Version не менялась, а save произошёл только
+            // благодаря Events/Manual tracking, возвращаем количество
+            // фактически изменённых сущностей
+            if (hasVersionChanges)
+                return checked((int)(snapshot.Version - persistedVersion));
+    
+            return detection.Count;
         }
         finally
         {
@@ -586,7 +766,10 @@ internal sealed class State<TEntity, TKey> : IMicroDbSet, IEnumerable<TEntity>
     {
         if (Interlocked.Exchange(ref _disposed, 1) != 0)
             return;
-
+        
+        // Change Tracker должен снять все event subscriptions,
+        // иначе сущности продолжат удерживать handlers уже освобождённого State
+        _changeTracker.Dispose();
         _saveSemaphore.Dispose();
     }
 }
